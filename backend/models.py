@@ -2,6 +2,7 @@
 from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, CheckConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import JSONB
 from database import Base
 
 class User(Base):
@@ -30,6 +31,10 @@ class Claim(Base):
 
     documents = relationship("Document", back_populates="claim", cascade="all, delete")
 
+    __table_args__ = (
+    CheckConstraint("status IN ('ouvert', 'en_cours', 'ferme')", name="valid_status"),
+    )
+
 
 class Document(Base):
     __tablename__ = "documents"
@@ -41,5 +46,6 @@ class Document(Base):
     document_type = Column(String(50), nullable=True)
     ocr_text = Column(Text, nullable=True)
     upload_date = Column(DateTime, server_default=func.now())
+    extracted_fields = Column(JSONB, nullable=True)
 
     claim = relationship("Claim", back_populates="documents")

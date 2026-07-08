@@ -6,6 +6,10 @@ class UserRole(str, Enum):
     gestionnaire = "gestionnaire"
     lecteur = "lecteur"
 
+class ClaimStatus(str, Enum):
+    ouvert = "ouvert"
+    en_cours = "en_cours"
+    ferme = "ferme"
 
 class UserCreate(BaseModel):
     name: str
@@ -33,13 +37,22 @@ class Token(BaseModel):
 class ClaimCreate(BaseModel):
     claim_number: str
     insured_name: str
-    status: str = "ouvert"  # Default status
+    status: ClaimStatus = ClaimStatus.ouvert  # Default status
 
 class ClaimOut(BaseModel):
     id: int
     claim_number: str
     insured_name: str
-    status: str
+    status: ClaimStatus
+
+    class Config:
+        from_attributes = True
+
+class DocumentOut(BaseModel):
+    id: int
+    claim_id: int
+    file_name: str
+    document_type: str | None = None
 
     class Config:
         from_attributes = True

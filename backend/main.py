@@ -1,13 +1,28 @@
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from database import SessionLocal
-from models import User, Claim
-from schemas import UserCreate, UserOut, LoginRequest, Token, ClaimCreate, ClaimOut
+from models import User, Claim, Document
+from schemas import UserCreate, UserOut, LoginRequest, Token, ClaimCreate, ClaimOut, ClaimStatus, DocumentOut
 from auth import hash_password, verify_password, create_access_token, get_current_user, require_role
-from typing import List
+from ocrHelper import extract_text, clean_ocr_text, extract_fields
+from typing import List, Optional
+import os
+import shutil
+import uuid
 
 app = FastAPI()
+
+# user tied to claim ony ?
+# type de claims ?
+# autorisation some funcs ?
+# pour entrainement, how to get ids ?
+
+UPLOAD_DIR = "uploads"
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg"}
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def get_db():
     db = SessionLocal()
@@ -77,8 +92,15 @@ def get_user(user_id: int, current_user: dict = Depends(get_current_user), db: S
 
 
 @app.get("/claims", response_model=List[ClaimOut])
-def list_claims(current_user: dict = Depends(require_role("admin","gestionnaire")), db: Session = Depends(get_db)):
-    return db.query(Claim).all()
+def list_claims(
+    status: Optional[ClaimStatus] = None,
+    current_user: dict = Depends(require_role("admin", "gestionnaire", "lecteur")),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Claim)
+    if status != None:
+        query = query.filter(Claim.status == status.value)
+    return query.all()
 
 @app.get("/claims/{claim_id}", response_model=ClaimOut)
 def get_claim(claim_id: int, current_user: dict = Depends(require_role("admin","gestionnaire")), db: Session = Depends(get_db)):
@@ -129,3 +151,62 @@ def delete_claim(claim_id: int, current_user: dict = Depends(require_role("admin
     db.delete(claim)
     db.commit()
     return {"detail": "Claim deleted successfully"}
+
+@app.post("/documents/upload", response_model=DocumentOut)
+def upload_document(
+    claim_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Validate claim exists
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    # Validate extension
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    # Validate size
+    file.file.seek(0, os.SEEK_END)
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+
+    # Save to disk with a unique name to avoid collisions
+    unique_name = f"{uuid.uuid4()}{ext}"
+    file_path = os.path.join(UPLOAD_DIR, unique_name)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Save record in DB
+    new_doc = Document(
+        claim_id=claim_id,
+        file_name=file.filename,
+        file_path=file_path,
+    )
+    db.add(new_doc)
+    db.commit()
+    db.refresh(new_doc)
+    return new_doc
+
+@app.post("/documents/{doc_id}/ocr")
+def run_ocr(doc_id: int, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    ext = os.path.splitext(doc.file_path)[1].lower()
+    raw_text = extract_text(doc.file_path, ext)          
+    clean_text = clean_ocr_text(raw_text)                 
+    fields = extract_fields(clean_text)                   
+
+    doc.ocr_text = raw_text
+    doc.extracted_fields = fields
+    doc.processing_status = "done"
+    db.commit()
+
+    return {"document_id": doc.id, "ocr_text": raw_text, "extracted_fields": fields}
