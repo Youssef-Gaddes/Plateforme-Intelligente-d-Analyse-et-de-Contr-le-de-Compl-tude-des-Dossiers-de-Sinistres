@@ -3,7 +3,7 @@ import pytesseract
 from PIL import Image
 from ocrHelper import preprocess_image
 
-image_path = "bin/pdf_converted_page_1.png"
+image_path = "bin/rappp.png"
 img  = Image.open(image_path)
 processed = preprocess_image(img)
 cv2.imwrite("debug_preprocessed.png", processed)  # inspect this visually

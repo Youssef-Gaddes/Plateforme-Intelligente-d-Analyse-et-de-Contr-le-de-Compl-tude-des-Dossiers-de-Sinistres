@@ -26,7 +26,7 @@ def preprocess_image(img: Image.Image) -> np.ndarray:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.fastNlMeansDenoising(gray, h=15)
 
-    bg = cv2.medianBlur(gray, 173)
+    bg = cv2.medianBlur(gray, 255)
     diff = 255 - cv2.absdiff(gray, bg)
     norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
 
