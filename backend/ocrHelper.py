@@ -1,9 +1,12 @@
+from annotated_types import doc
 from pdf2image import convert_from_path
+import fitz
 import pytesseract
 import cv2
 import numpy as np
 from PIL import Image
 import unicodedata, re
+from text_utils import clean_text as clean_ocr_text
 
 MONTHS_FR = {
     "janvier": "01", "février": "02", "fevrier": "02", "mars": "03", "avril": "04",
@@ -11,25 +14,77 @@ MONTHS_FR = {
     "septembre": "09", "octobre": "10", "novembre": "11", "décembre": "12", "decembre": "12",
 }
 
-def preprocess_image(pil_img: Image.Image) -> Image.Image:
-    img = np.array(pil_img.convert("L"))                 # grayscale
-    img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    return Image.fromarray(img)
+def preprocess_image(img: Image.Image) -> np.ndarray:
+    # Convert PIL Image -> OpenCV (numpy array, BGR color order)
+    img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+    h, w = img.shape[:2]
+    if max(h, w) < 2000:
+        scale = 2000 / max(h, w)
+        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.fastNlMeansDenoising(gray, h=15)
+
+    bg = cv2.medianBlur(gray, 173)
+    diff = 255 - cv2.absdiff(gray, bg)
+    norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+
+    thresh = cv2.adaptiveThreshold(
+        norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, 35, 11
+    )
+
+    coords = np.column_stack(np.where(thresh < 255))
+    angle = cv2.minAreaRect(coords)[-1]
+    if angle < -45:
+        angle = -(90 + angle)
+    else:
+        angle = -angle
+    if abs(angle) > 0.5:
+        (h, w) = thresh.shape
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        thresh = cv2.warpAffine(thresh, M, (w, h),
+                                 flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+    return thresh
 
 def extract_text(file_path: str, ext: str) -> str:
     if ext == ".pdf":
-        images = convert_from_path(file_path, dpi=300)
+        doc = fitz.open(file_path)
+        images = []
+    
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+    
+            # 300 DPI scaling
+            zoom = 300 / 72
+            matrix = fitz.Matrix(zoom, zoom)
+    
+            # Render page to a pixmap (Keep alpha=False unless you specifically need transparency)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+        
+            # 1. Convert pixmap raw bytes into a 1D NumPy array
+            img_buffer = np.frombuffer(pix.samples, dtype=np.uint8)
+        
+            # 2. Reshape the 1D array into an image matrix (Height x Width x Channels)
+            # pix.n represents the number of color channels (usually 3 for RGB)
+            img_np = img_buffer.reshape((pix.height, pix.width, pix.n))
+
+            # 3. CRITICAL FOR OPENCV: PyMuPDF uses RGB, but OpenCV defaults to BGR
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+            # Append the proper OpenCV-compatible image
+            images.append(img_bgr)
+            cv2.imwrite(f"pdf_converted_page_{page_num + 1}.png", img_bgr)
+            print(f"Page {page_num + 1} converted successfully. Shape: {img_bgr.shape}")
     else:
         images = [Image.open(file_path)]
     pages = [preprocess_image(img) for img in images]
-    return "\n".join(pytesseract.image_to_string(p, lang="fra") for p in pages)
+    custom_config = r'--oem 3 --psm 4 -l fra'
+    return "\n".join(pytesseract.image_to_string(p, config=custom_config) for p in pages)
 
-def clean_ocr_text(text: str) -> str:
-    text = text.lower()
-    text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")  # strip accents
-    text = re.sub(r"[^a-z0-9\s./-]", " ", text)   
-    text = re.sub(r"\s+", " ", text).strip()      
-    return text
 
 def extract_fields(clean_text: str) -> dict:
     fields = {}
