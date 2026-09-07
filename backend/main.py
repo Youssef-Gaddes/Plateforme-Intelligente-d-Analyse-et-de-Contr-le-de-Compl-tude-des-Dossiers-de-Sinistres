@@ -24,6 +24,7 @@ app = FastAPI()
 UPLOAD_DIR = "uploads"
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg"}
 MAX_FILE_SIZE = 10 * 1024 * 1024
+CONFIDENCE_THRESHOLD = 0.3
 
 REQUIRED_DOCUMENTS = {
     "auto": ["declaration_sinistre", "carte_grise", "permis_conduire", "constat_amiable"],
@@ -46,7 +47,15 @@ def compute_completeness_score(claim: Claim) -> float:
     if not required:
         return 0.0
 
-    valid_types = {doc.document_type for doc in claim.documents if doc.document_type in required}
+    valid_types = {
+        doc.document_type
+        for doc in claim.documents
+        if doc.document_type in required
+        and (
+            (doc.classification_confidence is not None and doc.classification_confidence >= CONFIDENCE_THRESHOLD)
+            or doc.is_manually_reviewed == 1
+        )
+    }
     matched_count = sum(1 for doc_type in required if doc_type in valid_types)
     return round((matched_count / len(required)) * 100.0, 2)
 

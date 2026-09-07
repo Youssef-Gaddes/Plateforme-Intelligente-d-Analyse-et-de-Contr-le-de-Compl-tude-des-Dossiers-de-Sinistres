@@ -149,6 +149,41 @@ interface DocumentItem {
 
       </section>
 
+      <!-- Document type breakdown -->
+      <section class="panel doc-types-panel" *ngIf="!loading()">
+        <div class="panel-header">
+          <h2>Types de documents</h2>
+        </div>
+
+        <div class="donut-row" *ngIf="documentTypeSegments().length; else noDocs">
+          <svg viewBox="0 0 160 160" class="donut-chart">
+            <circle cx="80" cy="80" r="70" fill="none" stroke="#f1f5f9" stroke-width="20" />
+            <circle *ngFor="let seg of documentTypeSegments()"
+                   cx="80" cy="80" r="70" fill="none"
+                   [attr.stroke]="seg.color"
+                   stroke-width="20"
+                   [attr.stroke-dasharray]="seg.dasharray"
+                   [attr.stroke-dashoffset]="seg.dashoffset"
+                   transform="rotate(-90 80 80)" />
+           <text x="80" y="76" text-anchor="middle" class="donut-total">{{ totalDocuments() }}</text>
+           <text x="80" y="94" text-anchor="middle" class="donut-total-label">documents</text>
+         </svg>
+
+         <ul class="doc-type-legend">
+            <li *ngFor="let seg of documentTypeSegments()">
+              <span class="legend-dot" [style.background]="seg.color"></span>
+              <span class="legend-label">{{ seg.label }}</span>
+              <span class="legend-count">{{ seg.count }}</span>
+             <span class="legend-percent">{{ seg.percent | number:'1.0-0' }}%</span>
+            </li>
+          </ul>
+        </div>
+
+  <ng-template #noDocs>
+    <p class="empty-state">Aucun document pour le moment.</p>
+  </ng-template>
+</section>
+
       <!-- Low-confidence alert panel -->
       <section class="panel alert-panel" *ngIf="!loading() && lowConfidenceDocs().length">
         <div class="panel-header">
@@ -296,6 +331,90 @@ interface DocumentItem {
       color: #64748b;
       font-weight: 500;
     }
+
+    .doc-types-panel {
+  padding: 1.5rem 2rem;
+}
+
+    .donut-row {
+      display: flex;
+      align-items: center;
+      gap: 2.5rem;
+      flex-wrap: wrap;
+}
+
+    .donut-chart {
+      width: 160px;
+      height: 160px;
+      flex-shrink: 0;
+}
+
+    .donut-chart circle {
+      transition: stroke-dasharray 0.4s ease;
+}
+
+    .donut-total {
+      font-size: 1.5rem;
+      font-weight: 800;
+      fill: #0f172a;
+}
+
+    .donut-total-label {
+      font-size: 0.7rem;
+      fill: #64748b;
+      font-weight: 500;
+}
+
+    .doc-type-legend {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.6rem;
+      flex: 1;
+      min-width: 220px;
+}
+
+    .doc-type-legend li {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+}
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+}
+
+    .legend-label {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #334155;
+      flex: 1;
+}
+
+    .legend-count {
+      font-size: 0.8125rem;
+      font-weight: 700;
+      color: #0f172a;
+}
+
+    .legend-percent {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      font-weight: 600;
+      width: 36px;
+      text-align: right;
+}
+
+    @media (max-width: 600px) {
+      .donut-row {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+}
 
     .skeleton {
       height: 96px;
@@ -555,6 +674,15 @@ export class DashboardComponent {
     { key: 'habitation', label: 'Habitation' },
     { key: 'sante',      label: 'Santé' },
   ];
+  documentTypeMeta = [
+  { key: 'declaration_sinistre', label: 'Déclaration de sinistre', color: '#2563eb' },
+  { key: 'carte_grise',          label: 'Carte grise',              color: '#7c3aed' },
+  { key: 'permis_conduire',      label: 'Permis de conduire',       color: '#16a34a' },
+  { key: 'facture',              label: 'Facture',                  color: '#d97706' },
+  { key: 'devis',                label: 'Devis',                    color: '#0891b2' },
+  { key: 'constat_amiable',      label: 'Constat amiable',          color: '#e11d48' },
+  { key: 'rapport_expertise',    label: "Rapport d'expertise",      color: '#4f46e5' },
+  ];
 
   constructor() {
     if (!this.auth.isAuthenticated) {
@@ -580,6 +708,44 @@ export class DashboardComponent {
   );
 
   totalDocuments = computed(() => this.documents().length);
+
+  documentTypeSegments = computed(() => {
+  const docs = this.documents();
+  const total = docs.length;
+  if (!total) return [];
+
+  const counts = new Map<string, number>();
+  for (const doc of docs) {
+    const key = doc.document_type ?? 'non_classe';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const palette = [
+    ...this.documentTypeMeta,
+    { key: 'non_classe', label: 'Non classé', color: '#94a3b8' },
+  ];
+
+  const r = 70;
+  const circumference = 2 * Math.PI * r;
+  let cumulative = 0;
+
+  return palette
+    .map(meta => {
+      const count = counts.get(meta.key) ?? 0;
+      const percent = (count / total) * 100;
+      const length = (percent / 100) * circumference;
+      const segment = {
+        ...meta,
+        count,
+        percent,
+        dasharray: `${length} ${circumference - length}`,
+        dashoffset: -cumulative,
+      };
+      cumulative += length;
+      return segment;
+    })
+    .filter(s => s.count > 0);
+  });
 
   avgCompleteness = computed(() => {
     const scored = this.claims().filter(c => c.completeness_score != null);
